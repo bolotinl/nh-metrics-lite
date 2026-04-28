@@ -13,3 +13,6 @@ dependencies = [
     "numpy",
     "scipy",
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
