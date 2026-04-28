@@ -1,4 +1,4 @@
-# nh_metrics_light
+# nh-metrics-lite
 A lightweight version of the evaluation/metrics module from [NeuralHydrology](https://github.com/neuralhydrology), without the machine learning dependencies of the rest of that library
 
 ## Installation
@@ -8,13 +8,13 @@ Requires Python 3.12 or higher.
 Install directly from GitHub using pip:
 
 ```bash
-pip install git+https://github.com/bolotinl/nh_metrics_light.git
+pip install git+https://github.com/bolotinl/nh-metrics-lite.git
 ```
 
 To add it as a dependency in another project, include it in your `requirements.txt`:
 
 ```
-nh_metrics_light @ git+https://github.com/bolotinl/nh_metrics_light.git@v0.1.0
+nh-metrics-lite @ git+https://github.com/bolotinl/nh-metrics-lite.git@v0.1.0
 ```
 
 Or in `pyproject.toml`:
@@ -22,7 +22,7 @@ Or in `pyproject.toml`:
 ```toml
 [project]
 dependencies = [
-    "nh_metrics_light @ git+https://github.com/bolotinl/nh_metrics_light.git@v0.1.0",
+    "nh-metrics-lite @ git+https://github.com/bolotinl/nh-metrics-lite.git@v0.1.0",
 ]
 ```
 
