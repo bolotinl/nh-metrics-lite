@@ -12,4 +12,8 @@ dependencies = [
     "xarray",
     "numpy",
     "scipy",
+    "pyarrow",
 ]
+
+[project.scripts]
+nh-metrics-lite = "nh_metrics_lite.cli:main"
