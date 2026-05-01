@@ -773,7 +773,9 @@ def mean_peak_timing(obs: DataArray,
         else:
             # define peak around idx as the max value inside of the window
             values = sim[idx - window:idx + window + 1]
-            peak_sim = values[values.argmax()]
+            # Use flat numpy argmax to avoid xarray FutureWarning behavior
+            # changes for DataArray.argmax() with no dim/axis.
+            peak_sim = values[np.argmax(values.data)]
 
         # get xarray object of qobs peak, for getting the date and calculating the datetime offset
         peak_obs = obs[idx]
