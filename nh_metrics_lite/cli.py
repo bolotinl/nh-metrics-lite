@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
 import re
 from pathlib import Path
 from typing import Iterable
@@ -84,6 +86,12 @@ def parse_args() -> argparse.Namespace:
         default="nh_metrics.parquet",
         help="Filename to write into each run directory.",
     )
+    parser.add_argument(
+        "--n-cores",
+        type=int,
+        default=1,
+        help="Number of CPU cores (worker threads) to use per run folder. Default is 1.",
+    )
     return parser.parse_args()
 
 
@@ -98,28 +106,58 @@ def main() -> int:
         raise FileNotFoundError(f"Observed parquet does not exist: {observed_parquet}")
 
     resolution = _resolve_resolution(args.resolution)
+    n_cores = _resolve_n_cores(args.n_cores)
 
     observed = pd.read_parquet(observed_parquet)
     observed["value_time"] = pd.to_datetime(observed["value_time"], utc=False)
     site_column = _resolve_site_column(observed, args.site_column)
-    observed_by_site = {
-        str(site_id): site_frame.copy()
-        for site_id, site_frame in observed.groupby(site_column, dropna=False)
-    }
+    observed_by_site = _prepare_observed_by_site(observed, site_column)
 
     run_directories = list(_iter_run_directories(root_dir))
     if not run_directories:
         raise RuntimeError(f"No run directories with model_outputs were found under {root_dir}")
+    total_folders = len(run_directories)
+    completed_folders = 0
 
     site_id_pattern = re.compile(args.site_id_regex) if args.site_id_regex else None
-    for run_directory in run_directories:
-        model_output_dir = run_directory / "model_outputs"
-        site_id = _resolve_site_id(run_directory.name, observed_by_site.keys(), site_id_pattern)
-        observed_site = observed_by_site[site_id]
-        metrics_frame = _build_metrics_frame(model_output_dir, observed_site, resolution=resolution)
-        output_path = model_output_dir / args.output_name
-        metrics_frame.to_parquet(output_path, index=False)
-        print(f"Wrote {output_path}")
+    if n_cores == 1 or len(run_directories) == 1:
+        for run_directory in run_directories:
+            _process_run_directory(
+                run_directory=run_directory,
+                observed_by_site=observed_by_site,
+                site_id_pattern=site_id_pattern,
+                resolution=resolution,
+                output_name=args.output_name,
+            )
+            completed_folders += 1
+            print(f"Completed {completed_folders}/{total_folders} folders")
+    else:
+        max_workers = min(n_cores, len(run_directories))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _process_run_directory,
+                    run_directory=run_directory,
+                    observed_by_site=observed_by_site,
+                    site_id_pattern=site_id_pattern,
+                    resolution=resolution,
+                    output_name=args.output_name,
+                ): run_directory
+                for run_directory in run_directories
+            }
+            for future in as_completed(futures):
+                run_directory = futures[future]
+                try:
+                    future.result()
+                except Exception as err:
+                    raise RuntimeError(f"Failed processing run directory {run_directory}") from err
+                completed_folders += 1
+                print(f"Completed {completed_folders}/{total_folders} folders")
+
+    print(
+        f"Finished. Metrics files are written under: "
+        f"{root_dir}/<run_folder>/model_outputs/{args.output_name}"
+    )
 
     return 0
 
@@ -200,6 +238,38 @@ def _resolve_resolution(resolution: str) -> str:
     raise ValueError(f"Unsupported resolution {resolution!r}. Allowed values are 1H and 1D.")
 
 
+def _resolve_n_cores(n_cores: int) -> int:
+    if n_cores < 1:
+        raise ValueError("--n-cores must be >= 1")
+    max_cores = os.cpu_count() or 1
+    return min(n_cores, max_cores)
+
+
+def _prepare_observed_by_site(observed: pd.DataFrame, site_column: str) -> dict[str, pd.DataFrame]:
+    observed_by_site: dict[str, pd.DataFrame] = {}
+    for site_id, site_frame in observed.groupby(site_column, dropna=False):
+        cleaned = site_frame[["value_time", "value"]].dropna(subset=["value_time", "value"])
+        cleaned = cleaned.sort_values("value_time").drop_duplicates(subset=["value_time"], keep="last")
+        observed_by_site[str(site_id)] = cleaned
+    return observed_by_site
+
+
+def _process_run_directory(
+    run_directory: Path,
+    observed_by_site: dict[str, pd.DataFrame],
+    site_id_pattern: re.Pattern[str] | None,
+    resolution: str,
+    output_name: str,
+) -> Path:
+    model_output_dir = run_directory / "model_outputs"
+    site_id = _resolve_site_id(run_directory.name, observed_by_site.keys(), site_id_pattern)
+    observed_site = observed_by_site[site_id]
+    metrics_frame = _build_metrics_frame(model_output_dir, observed_site, resolution=resolution)
+    output_path = model_output_dir / output_name
+    metrics_frame.to_parquet(output_path, index=False)
+    return output_path
+
+
 def _build_metrics_frame(model_output_dir: Path, observed_site: pd.DataFrame, resolution: str) -> pd.DataFrame:
     sim_files = []
     for sim_file in model_output_dir.glob("sim_*.parquet"):
@@ -213,57 +283,64 @@ def _build_metrics_frame(model_output_dir: Path, observed_site: pd.DataFrame, re
     if not sim_files:
         raise RuntimeError(f"No sim_<iteration>.parquet files found in {model_output_dir}")
 
-    observed_site = observed_site[["value_time", "value"]].dropna(subset=["value_time", "value"])
-    observed_site = observed_site.sort_values("value_time").drop_duplicates(subset=["value_time"], keep="last")
-
     metric_values_by_iteration: dict[int, dict[str, float]] = {}
     for iteration, sim_file in sim_files:
-        sim_frame = pd.read_parquet(sim_file)
-
-        if "value_time" not in sim_frame.columns:
-            if sim_frame.index.name == "value_time" or isinstance(sim_frame.index, pd.DatetimeIndex):
-                sim_frame = sim_frame.reset_index()
-                first_column = sim_frame.columns[0]
-                if first_column != "value_time":
-                    sim_frame = sim_frame.rename(columns={first_column: "value_time"})
-
-        required_sim_columns = {"value_time", "sim_flow"}
-        missing_sim_columns = required_sim_columns - set(sim_frame.columns)
-        if missing_sim_columns:
-            raise ValueError(
-                f"Simulation file {sim_file} is missing required columns: {sorted(missing_sim_columns)}. "
-                f"Available columns: {list(sim_frame.columns)}"
-            )
-
-        sim_frame["value_time"] = pd.to_datetime(sim_frame["value_time"], utc=False)
-        sim_frame = sim_frame[["value_time", "sim_flow"]].dropna(subset=["value_time", "sim_flow"])
-        sim_frame = sim_frame.sort_values("value_time").drop_duplicates(subset=["value_time"], keep="last")
-
-        merged = observed_site.merge(sim_frame, on="value_time", how="inner")
-        if merged.empty:
-            raise RuntimeError(f"No overlapping timestamps between observed data and {sim_file}")
-
-        obs_da = xr.DataArray(
-            merged["value"].to_numpy(),
-            coords={"value_time": merged["value_time"].to_numpy()},
-            dims=["value_time"],
-        )
-        sim_da = xr.DataArray(
-            merged["sim_flow"].to_numpy(),
-            coords={"value_time": merged["value_time"].to_numpy()},
-            dims=["value_time"],
-        )
-        metric_values_by_iteration[iteration] = calculate_metrics(
-            obs_da,
-            sim_da,
-            metrics=METRIC_NAMES,
+        metric_values_by_iteration[iteration] = _calculate_iteration_metrics(
+            sim_file=sim_file,
+            observed_site=observed_site,
             resolution=resolution,
-            datetime_coord="value_time",
         )
 
-    metrics_frame = pd.DataFrame(metric_values_by_iteration)
+    ordered_metric_values = {iteration: metric_values_by_iteration[iteration] for iteration, _ in sim_files}
+
+    metrics_frame = pd.DataFrame(ordered_metric_values)
     metrics_frame["__index_level_0__"] = metrics_frame.index
     return metrics_frame.reset_index(drop=True)
+
+
+def _calculate_iteration_metrics(sim_file: Path, observed_site: pd.DataFrame, resolution: str) -> dict[str, float]:
+    sim_frame = pd.read_parquet(sim_file)
+
+    if "value_time" not in sim_frame.columns:
+        if sim_frame.index.name == "value_time" or isinstance(sim_frame.index, pd.DatetimeIndex):
+            sim_frame = sim_frame.reset_index()
+            first_column = sim_frame.columns[0]
+            if first_column != "value_time":
+                sim_frame = sim_frame.rename(columns={first_column: "value_time"})
+
+    required_sim_columns = {"value_time", "sim_flow"}
+    missing_sim_columns = required_sim_columns - set(sim_frame.columns)
+    if missing_sim_columns:
+        raise ValueError(
+            f"Simulation file {sim_file} is missing required columns: {sorted(missing_sim_columns)}. "
+            f"Available columns: {list(sim_frame.columns)}"
+        )
+
+    sim_frame["value_time"] = pd.to_datetime(sim_frame["value_time"], utc=False)
+    sim_frame = sim_frame[["value_time", "sim_flow"]].dropna(subset=["value_time", "sim_flow"])
+    sim_frame = sim_frame.sort_values("value_time").drop_duplicates(subset=["value_time"], keep="last")
+
+    merged = observed_site.merge(sim_frame, on="value_time", how="inner")
+    if merged.empty:
+        raise RuntimeError(f"No overlapping timestamps between observed data and {sim_file}")
+
+    obs_da = xr.DataArray(
+        merged["value"].to_numpy(),
+        coords={"value_time": merged["value_time"].to_numpy()},
+        dims=["value_time"],
+    )
+    sim_da = xr.DataArray(
+        merged["sim_flow"].to_numpy(),
+        coords={"value_time": merged["value_time"].to_numpy()},
+        dims=["value_time"],
+    )
+    return calculate_metrics(
+        obs_da,
+        sim_da,
+        metrics=METRIC_NAMES,
+        resolution=resolution,
+        datetime_coord="value_time",
+    )
 
 
 if __name__ == "__main__":
