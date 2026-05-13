@@ -84,7 +84,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-name",
         default="nh_metrics.parquet",
-        help="Filename to write into each run directory.",
+        help="Filename to write into each run subdirectory under --output-dir.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help=(
+            "Root directory where output files are written. "
+            "A subdirectory named after each run folder will be created there, "
+            "containing the output metrics file."
+        ),
     )
     parser.add_argument(
         "--n-cores",
@@ -107,6 +117,8 @@ def main() -> int:
 
     resolution = _resolve_resolution(args.resolution)
     n_cores = _resolve_n_cores(args.n_cores)
+    output_dir = args.output_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     observed = pd.read_parquet(observed_parquet)
     observed["value_time"] = pd.to_datetime(observed["value_time"], utc=False)
@@ -127,6 +139,7 @@ def main() -> int:
                 observed_by_site=observed_by_site,
                 site_id_pattern=site_id_pattern,
                 resolution=resolution,
+                output_dir=output_dir,
                 output_name=args.output_name,
             )
             completed_folders += 1
@@ -141,6 +154,7 @@ def main() -> int:
                     observed_by_site=observed_by_site,
                     site_id_pattern=site_id_pattern,
                     resolution=resolution,
+                    output_dir=output_dir,
                     output_name=args.output_name,
                 ): run_directory
                 for run_directory in run_directories
@@ -156,7 +170,7 @@ def main() -> int:
 
     print(
         f"Finished. Metrics files are written under: "
-        f"{root_dir}/<run_folder>/model_outputs/{args.output_name}"
+        f"{output_dir}/<run_folder>/{args.output_name}"
     )
 
     return 0
@@ -259,13 +273,16 @@ def _process_run_directory(
     observed_by_site: dict[str, pd.DataFrame],
     site_id_pattern: re.Pattern[str] | None,
     resolution: str,
+    output_dir: Path,
     output_name: str,
 ) -> Path:
     model_output_dir = run_directory / "model_outputs"
     site_id = _resolve_site_id(run_directory.name, observed_by_site.keys(), site_id_pattern)
     observed_site = observed_by_site[site_id]
     metrics_frame = _build_metrics_frame(model_output_dir, observed_site, resolution=resolution)
-    output_path = model_output_dir / output_name
+    run_output_dir = output_dir / run_directory.name
+    run_output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = run_output_dir / output_name
     metrics_frame.to_parquet(output_path, index=False)
     return output_path
 
