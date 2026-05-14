@@ -134,7 +134,7 @@ def main() -> int:
     site_id_pattern = re.compile(args.site_id_regex) if args.site_id_regex else None
     if n_cores == 1 or len(run_directories) == 1:
         for run_directory in run_directories:
-            _process_run_directory(
+            _, was_skipped = _process_run_directory(
                 run_directory=run_directory,
                 observed_by_site=observed_by_site,
                 site_id_pattern=site_id_pattern,
@@ -142,6 +142,10 @@ def main() -> int:
                 output_dir=output_dir,
                 output_name=args.output_name,
             )
+            if was_skipped:
+                print(
+                    f"Skipped {run_directory.name} because metrics were already calculated"
+                )
             completed_folders += 1
             print(f"Completed {completed_folders}/{total_folders} folders")
     else:
@@ -162,9 +166,13 @@ def main() -> int:
             for future in as_completed(futures):
                 run_directory = futures[future]
                 try:
-                    future.result()
+                    _, was_skipped = future.result()
                 except Exception as err:
                     raise RuntimeError(f"Failed processing run directory {run_directory}") from err
+                if was_skipped:
+                    print(
+                        f"Skipped {run_directory.name} because metrics were already calculated"
+                    )
                 completed_folders += 1
                 print(f"Completed {completed_folders}/{total_folders} folders")
 
@@ -275,16 +283,19 @@ def _process_run_directory(
     resolution: str,
     output_dir: Path,
     output_name: str,
-) -> Path:
+) -> tuple[Path, bool]:
+    output_path = output_dir / run_directory.name / output_name
+    if output_path.exists():
+        return output_path, True
+
     model_output_dir = run_directory / "model_outputs"
     site_id = _resolve_site_id(run_directory.name, observed_by_site.keys(), site_id_pattern)
     observed_site = observed_by_site[site_id]
     metrics_frame = _build_metrics_frame(model_output_dir, observed_site, resolution=resolution)
     run_output_dir = output_dir / run_directory.name
     run_output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = run_output_dir / output_name
     metrics_frame.to_parquet(output_path, index=False)
-    return output_path
+    return output_path, False
 
 
 def _build_metrics_frame(model_output_dir: Path, observed_site: pd.DataFrame, resolution: str) -> pd.DataFrame:
