@@ -680,7 +680,7 @@ def fdc_flv(obs: DataArray, sim: DataArray, l: float = 0.3) -> float:
 
     # for numerical reasons change 0s to 1e-6. Simulations can still contain negatives, so also reset those.
     sim[sim <= 0] = 1e-6
-    obs[obs == 0] = 1e-6
+    obs[obs <= 0] = 1e-6
 
     obs = obs[-np.round(l * len(obs)).astype(int):]
     sim = sim[-np.round(l * len(sim)).astype(int):]
