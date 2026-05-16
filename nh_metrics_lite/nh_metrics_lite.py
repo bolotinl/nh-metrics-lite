@@ -470,7 +470,10 @@ def kge(obs: DataArray, sim: DataArray, weights: List[float] = [1., 1., 1.]) -> 
     if len(obs) < 2:
         return np.nan
 
-    r, _ = stats.pearsonr(obs.values, sim.values)
+    if np.std(obs.values) == 0 or np.std(sim.values) == 0:
+        r = np.nan
+    else:
+        r, _ = stats.pearsonr(obs.values, sim.values)
 
     alpha = sim.std() / obs.std()
     beta = sim.mean() / obs.mean()
@@ -506,7 +509,10 @@ def pearsonr(obs: DataArray, sim: DataArray) -> float:
     if len(obs) < 2:
         return np.nan
 
-    r, _ = stats.pearsonr(obs.values, sim.values)
+    if np.std(obs.values) == 0 or np.std(sim.values) == 0:
+        r = np.nan
+    else:
+        r, _ = stats.pearsonr(obs.values, sim.values)
 
     return float(r)
 
