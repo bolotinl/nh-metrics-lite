@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import re
 from pathlib import Path
+import threading
 from typing import Iterable
 
 import pandas as pd
@@ -130,24 +131,37 @@ def main() -> int:
         raise RuntimeError(f"No run directories with model_outputs were found under {root_dir}")
     total_folders = len(run_directories)
     completed_folders = 0
+    failed_log_path = output_dir / "failed_directories.txt"
+    failed_log_lock = threading.Lock()
 
     site_id_pattern = re.compile(args.site_id_regex) if args.site_id_regex else None
     if n_cores == 1 or len(run_directories) == 1:
         for run_directory in run_directories:
-            _, was_skipped = _process_run_directory(
-                run_directory=run_directory,
-                observed_by_site=observed_by_site,
-                site_id_pattern=site_id_pattern,
-                resolution=resolution,
-                output_dir=output_dir,
-                output_name=args.output_name,
-            )
-            if was_skipped:
-                print(
-                    f"Skipped {run_directory.name} because metrics were already calculated"
+            try:
+                _, was_skipped = _process_run_directory(
+                    run_directory=run_directory,
+                    observed_by_site=observed_by_site,
+                    site_id_pattern=site_id_pattern,
+                    resolution=resolution,
+                    output_dir=output_dir,
+                    output_name=args.output_name,
+                    failed_log_path=failed_log_path,
+                    failed_log_lock=failed_log_lock,
                 )
+            except Exception as err:
+                _append_problem_entry(
+                    failed_log_path,
+                    failed_log_lock,
+                    f"DIRECTORY\t{run_directory.name}\t{type(err).__name__}: {err}",
+                )
+                print(f"Failed {run_directory.name}: {err}")
+                completed_folders += 1
+                print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)")
+                continue
+            if was_skipped:
+                print(f"Skipped {run_directory.name} because metrics were already calculated")
             completed_folders += 1
-            print(f"Completed {completed_folders}/{total_folders} folders")
+            print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)")
     else:
         max_workers = min(n_cores, len(run_directories))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -160,6 +174,8 @@ def main() -> int:
                     resolution=resolution,
                     output_dir=output_dir,
                     output_name=args.output_name,
+                    failed_log_path=failed_log_path,
+                    failed_log_lock=failed_log_lock,
                 ): run_directory
                 for run_directory in run_directories
             }
@@ -168,13 +184,19 @@ def main() -> int:
                 try:
                     _, was_skipped = future.result()
                 except Exception as err:
-                    raise RuntimeError(f"Failed processing run directory {run_directory}") from err
-                if was_skipped:
-                    print(
-                        f"Skipped {run_directory.name} because metrics were already calculated"
+                    _append_problem_entry(
+                        failed_log_path,
+                        failed_log_lock,
+                        f"DIRECTORY\t{run_directory.name}\t{type(err).__name__}: {err}",
                     )
+                    print(f"Failed {run_directory.name}: {err}")
+                    completed_folders += 1
+                    print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)")
+                    continue
+                if was_skipped:
+                    print(f"Skipped {run_directory.name} because metrics were already calculated")
                 completed_folders += 1
-                print(f"Completed {completed_folders}/{total_folders} folders")
+                print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)")
 
     print(
         f"Finished. Metrics files are written under: "
@@ -283,6 +305,8 @@ def _process_run_directory(
     resolution: str,
     output_dir: Path,
     output_name: str,
+    failed_log_path: Path,
+    failed_log_lock: threading.Lock,
 ) -> tuple[Path, bool]:
     output_path = output_dir / run_directory.name / output_name
     if output_path.exists():
@@ -291,14 +315,28 @@ def _process_run_directory(
     model_output_dir = run_directory / "model_outputs"
     site_id = _resolve_site_id(run_directory.name, observed_by_site.keys(), site_id_pattern)
     observed_site = observed_by_site[site_id]
-    metrics_frame = _build_metrics_frame(model_output_dir, observed_site, resolution=resolution)
+    metrics_frame = _build_metrics_frame(
+        model_output_dir,
+        observed_site,
+        resolution=resolution,
+        run_directory_name=run_directory.name,
+        failed_log_path=failed_log_path,
+        failed_log_lock=failed_log_lock,
+    )
     run_output_dir = output_dir / run_directory.name
     run_output_dir.mkdir(parents=True, exist_ok=True)
     metrics_frame.to_parquet(output_path, index=False)
     return output_path, False
 
 
-def _build_metrics_frame(model_output_dir: Path, observed_site: pd.DataFrame, resolution: str) -> pd.DataFrame:
+def _build_metrics_frame(
+    model_output_dir: Path,
+    observed_site: pd.DataFrame,
+    resolution: str,
+    run_directory_name: str,
+    failed_log_path: Path,
+    failed_log_lock: threading.Lock,
+) -> pd.DataFrame:
     sim_files = []
     for sim_file in model_output_dir.glob("sim_*.parquet"):
         match = SIM_FILE_PATTERN.search(sim_file.name)
@@ -313,21 +351,59 @@ def _build_metrics_frame(model_output_dir: Path, observed_site: pd.DataFrame, re
 
     metric_values_by_iteration: dict[int, dict[str, float]] = {}
     for iteration, sim_file in sim_files:
-        metric_values_by_iteration[iteration] = _calculate_iteration_metrics(
+        metric_values = _calculate_iteration_metrics(
             sim_file=sim_file,
             observed_site=observed_site,
             resolution=resolution,
+            run_directory_name=run_directory_name,
+            failed_log_path=failed_log_path,
+            failed_log_lock=failed_log_lock,
         )
+        if metric_values is None:
+            continue
+        metric_values_by_iteration[iteration] = metric_values
 
-    ordered_metric_values = {iteration: metric_values_by_iteration[iteration] for iteration, _ in sim_files}
+    if not metric_values_by_iteration:
+        raise RuntimeError(f"No usable sim_<iteration>.parquet files were found in {model_output_dir}")
+
+    ordered_metric_values = {
+        iteration: metric_values_by_iteration[iteration]
+        for iteration, _ in sim_files
+        if iteration in metric_values_by_iteration
+    }
 
     metrics_frame = pd.DataFrame(ordered_metric_values)
     metrics_frame["__index_level_0__"] = metrics_frame.index
     return metrics_frame.reset_index(drop=True)
 
 
-def _calculate_iteration_metrics(sim_file: Path, observed_site: pd.DataFrame, resolution: str) -> dict[str, float]:
+def _calculate_iteration_metrics(
+    sim_file: Path,
+    observed_site: pd.DataFrame,
+    resolution: str,
+    run_directory_name: str,
+    failed_log_path: Path,
+    failed_log_lock: threading.Lock,
+) -> dict[str, float] | None:
+    if not sim_file.exists() or sim_file.stat().st_size == 0:
+        print(f"WARNING: File {sim_file} is empty or missing. Skipping this iteration.")
+        _append_problem_entry(
+            failed_log_path,
+            failed_log_lock,
+            f"ITERATION\t{run_directory_name}\t{sim_file.name}\tFile is empty or missing",
+        )
+        return None
+
     sim_frame = pd.read_parquet(sim_file)
+
+    if sim_frame.empty:
+        print(f"WARNING: File {sim_file} has no rows. Skipping this iteration.")
+        _append_problem_entry(
+            failed_log_path,
+            failed_log_lock,
+            f"ITERATION\t{run_directory_name}\t{sim_file.name}\tFile has no rows",
+        )
+        return None
 
     if "value_time" not in sim_frame.columns:
         if sim_frame.index.name == "value_time" or isinstance(sim_frame.index, pd.DatetimeIndex):
@@ -369,6 +445,13 @@ def _calculate_iteration_metrics(sim_file: Path, observed_site: pd.DataFrame, re
         resolution=resolution,
         datetime_coord="value_time",
     )
+
+
+def _append_problem_entry(log_path: Path, lock: threading.Lock, entry: str) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock:
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{entry}\n")
 
 
 if __name__ == "__main__":
