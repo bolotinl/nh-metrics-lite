@@ -31,24 +31,24 @@ cd "$PROJECT_DIR"
 module load rdhpcs-python/3.12
 
 # 2. Smart Git Management (Skip pull if running on restricted compute nodes)
-if [ ! -d "nh-metrics-lite" ]; then
-    echo "ERROR: Repository missing. Please clone on a login node first."
-    exit 1
-else
-    # Check if we are running inside an interactive login shell or a batch job
-    if [ -z "$SLURM_JOB_ID" ]; then
-        echo "Running locally on login node. Updating repository..."
-        cd nh-metrics-lite && git pull && cd ..
-    else
-        echo "Running inside Slurm job $SLURM_JOB_ID. Skipping git pull (offline node)."
-    fi
-fi
+# if [ ! -d "nh-metrics-lite" ]; then
+#     echo "ERROR: Repository missing. Please clone on a login node first."
+#     exit 1
+# else
+#     # Check if we are running inside an interactive login shell or a batch job
+#     if [ -z "$SLURM_JOB_ID" ]; then
+#         echo "Running locally on login node. Updating repository..."
+#         cd nh-metrics-lite && git pull && cd ..
+#     else
+#         echo "Running inside Slurm job $SLURM_JOB_ID. Skipping git pull (offline node)."
+#     fi
+# fi
 
 # 3. Virtual Environment Lifecycle
-if [ ! -d "nh_metrics_venv" ]; then
-    echo "ERROR: Virtual environment missing. Please build on a login node first."
-    exit 1
-fi
+# if [ ! -d "nh_metrics_venv" ]; then
+#     echo "ERROR: Virtual environment missing. Please build on a login node first."
+#     exit 1
+# fi
 
 source nh_metrics_venv/bin/activate
 
@@ -56,7 +56,7 @@ source nh_metrics_venv/bin/activate
 cd nh-metrics-lite
 # --no-index forces pip to look strictly at local source configurations
 # --no-build-isolation stops pip from trying to download build dependencies
-pip install --no-index --no-build-isolation -e .
+# pip install --no-index --no-build-isolation -e .
 
 # 5. Execute Core Data Loop
 echo "Starting nh-metrics-lite run..."
