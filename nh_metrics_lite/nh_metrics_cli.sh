@@ -30,31 +30,36 @@ cd "$PROJECT_DIR"
 # 1. Environment setup
 module load rdhpcs-python/3.12
 
-# 2. Clone or Update the Git Repository
+# 2. Smart Git Management (Skip pull if running on restricted compute nodes)
 if [ ! -d "nh-metrics-lite" ]; then
-    echo "Cloning nh-metrics-lite repository..."
-    git clone "$REPO_URL"
+    echo "ERROR: Repository missing. Please clone on a login node first."
+    exit 1
 else
-    echo "Repository already exists. Pulling latest changes..."
-    cd nh-metrics-lite
-    git pull
-    cd ..
+    # Check if we are running inside an interactive login shell or a batch job
+    if [ -z "$SLURM_JOB_ID" ]; then
+        echo "Running locally on login node. Updating repository..."
+        cd nh-metrics-lite && git pull && cd ..
+    else
+        echo "Running inside Slurm job $SLURM_JOB_ID. Skipping git pull (offline node)."
+    fi
 fi
 
-# 3. Virtual Environment Lifecycle (Safe for first-timers and repeat runs)
+# 3. Virtual Environment Lifecycle
 if [ ! -d "nh_metrics_venv" ]; then
-    echo "Creating virtual environment for the first time..."
-    python3 -m venv nh_metrics_venv
+    echo "ERROR: Virtual environment missing. Please build on a login node first."
+    exit 1
 fi
 
 source nh_metrics_venv/bin/activate
 
-# 4. Ensure dependencies are up to date
-pip install --upgrade pip
+# 4. Safe Offline Package Registration
 cd nh-metrics-lite
-pip install -e .
+# --no-index forces pip to look strictly at local source configurations
+# --no-build-isolation stops pip from trying to download build dependencies
+pip install --no-index --no-build-isolation -e .
 
-# 5. Execute using the variables
+# 5. Execute Core Data Loop
+echo "Starting nh-metrics-lite run..."
 nh-metrics-lite \
   "$INPUT_DIR" \
   "$OBS_FILE" \
