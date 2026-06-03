@@ -875,7 +875,7 @@ def missed_peaks(obs: DataArray,
     return missed_events / len(peaks_obs_times)
 
 
-def mean_absolute_percentage_peak_error(obs: DataArray, sim: DataArray) -> float:
+def mean_absolute_percentage_peak_error(obs: DataArray, sim: DataArray, distance: int = 100) -> float:
     r"""Calculate the mean absolute percentage error (MAPE) for peaks
 
     .. math:: \text{MAPE}_\text{peak} = \frac{1}{P}\sum_{p=1}^{P} \left |\frac{Q_{s,p} - Q_{o,p}}{Q_{o,p}} \right | \times 100,
@@ -893,6 +893,8 @@ def mean_absolute_percentage_peak_error(obs: DataArray, sim: DataArray) -> float
         Observed time series.
     sim : DataArray
         Simulated time series.
+    distance : int, optional
+        Minimum distance between peaks in samples, by default 100.
 
     Returns
     -------
@@ -910,7 +912,7 @@ def mean_absolute_percentage_peak_error(obs: DataArray, sim: DataArray) -> float
         return np.nan
 
     # heuristic to get indices of peaks and their corresponding height.
-    peaks, _ = signal.find_peaks(obs.values, distance=100, prominence=np.std(obs.values))
+    peaks, _ = signal.find_peaks(obs.values, distance=distance, prominence=np.std(obs.values))
 
     # check if any peaks exist, otherwise return np.nan
     if peaks.size == 0:
@@ -929,7 +931,8 @@ def calculate_metrics(obs: DataArray,
                       sim: DataArray,
                       metrics: List[str],
                       resolution: str = "1D",
-                      datetime_coord: str = None) -> Dict[str, float]:
+                      datetime_coord: str = None,
+                      distance: int = 100) -> Dict[str, float]:
     """Calculate specific metrics with default values.
     
     Parameters
@@ -944,6 +947,8 @@ def calculate_metrics(obs: DataArray,
         Temporal resolution of the time series in pandas format, e.g. '1D' for daily and '1h' for hourly.
     datetime_coord : str, optional
         Datetime coordinate in the passed DataArray. Tried to infer automatically if not specified.
+    distance : int, optional
+        Minimum distance between peaks in samples, by default 100.
 
     Returns
     -------
@@ -987,7 +992,7 @@ def calculate_metrics(obs: DataArray,
         elif metric.lower() == "missed-peaks":
             values["Missed-Peaks"] = missed_peaks(obs, sim, resolution=resolution, datetime_coord=datetime_coord)
         elif metric.lower() == "peak-mape":
-            values["Peak-MAPE"] = mean_absolute_percentage_peak_error(obs, sim)
+            values["Peak-MAPE"] = mean_absolute_percentage_peak_error(obs, sim, distance=distance)
         else:
             raise RuntimeError(f"Unknown metric {metric}")
 
