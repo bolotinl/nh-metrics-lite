@@ -121,10 +121,16 @@ def main() -> int:
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    print(f"Loading observed parquet: {observed_parquet}", flush=True)
     observed = pd.read_parquet(observed_parquet)
     observed["value_time"] = pd.to_datetime(observed["value_time"], utc=False)
     site_column = _resolve_site_column(observed, args.site_column)
     observed_by_site = _prepare_observed_by_site(observed, site_column)
+
+    print(
+        f"Prepared {len(observed_by_site)} observed site groups from {len(observed):,} rows",
+        flush=True,
+    )
 
     run_directories = list(_iter_run_directories(root_dir))
     if not run_directories:
@@ -135,9 +141,18 @@ def main() -> int:
     failed_log_lock = threading.Lock()
 
     site_id_pattern = re.compile(args.site_id_regex) if args.site_id_regex else None
+    if n_cores > 1:
+        print(
+            f"Processing {total_folders} run directories with up to {n_cores} worker threads",
+            flush=True,
+        )
+    else:
+        print(f"Processing {total_folders} run directories sequentially", flush=True)
+
     if n_cores == 1 or len(run_directories) == 1:
         for run_directory in run_directories:
             try:
+                print(f"Starting {run_directory.name}", flush=True)
                 _, was_skipped = _process_run_directory(
                     run_directory=run_directory,
                     observed_by_site=observed_by_site,
@@ -154,17 +169,20 @@ def main() -> int:
                     failed_log_lock,
                     f"DIRECTORY\t{run_directory.name}\t{type(err).__name__}: {err}",
                 )
-                print(f"Failed {run_directory.name}: {err}")
+                print(f"Failed {run_directory.name}: {err}", flush=True)
                 completed_folders += 1
-                print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)")
+                print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)", flush=True)
                 continue
             if was_skipped:
-                print(f"Skipped {run_directory.name} because metrics were already calculated")
+                print(f"Skipped {run_directory.name} because metrics were already calculated", flush=True)
             completed_folders += 1
-            print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)")
+            print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)", flush=True)
     else:
         max_workers = min(n_cores, len(run_directories))
+        for run_directory in run_directories:
+            print(f"Queueing {run_directory.name}", flush=True)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            print(f"Submitting {total_folders} run directories to the worker pool", flush=True)
             futures = {
                 executor.submit(
                     _process_run_directory,
@@ -189,18 +207,19 @@ def main() -> int:
                         failed_log_lock,
                         f"DIRECTORY\t{run_directory.name}\t{type(err).__name__}: {err}",
                     )
-                    print(f"Failed {run_directory.name}: {err}")
+                    print(f"Failed {run_directory.name}: {err}", flush=True)
                     completed_folders += 1
-                    print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)")
+                    print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)", flush=True)
                     continue
                 if was_skipped:
-                    print(f"Skipped {run_directory.name} because metrics were already calculated")
+                    print(f"Skipped {run_directory.name} because metrics were already calculated", flush=True)
                 completed_folders += 1
-                print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)")
+                print(f"Completed {run_directory.name} ({completed_folders}/{total_folders} folders)", flush=True)
 
     print(
         f"Finished. Metrics files are written under: "
-        f"{output_dir}/<run_folder>/{args.output_name}"
+        f"{output_dir}/<run_folder>/{args.output_name}",
+        flush=True,
     )
 
     return 0
@@ -313,6 +332,7 @@ def _process_run_directory(
         return output_path, True
 
     model_output_dir = run_directory / "model_outputs"
+    print(f"  Reading simulations for {run_directory.name}", flush=True)
     site_id = _resolve_site_id(run_directory.name, observed_by_site.keys(), site_id_pattern)
     observed_site = observed_by_site[site_id]
     metrics_frame = _build_metrics_frame(
@@ -349,8 +369,14 @@ def _build_metrics_frame(
     if not sim_files:
         raise RuntimeError(f"No sim_<iteration>.parquet files found in {model_output_dir}")
 
+    print(
+        f"  Found {len(sim_files)} simulation files in {model_output_dir.name}",
+        flush=True,
+    )
+
     metric_values_by_iteration: dict[int, dict[str, float]] = {}
     for iteration, sim_file in sim_files:
+        print(f"    Calculating iteration {iteration} from {sim_file.name}", flush=True)
         metric_values = _calculate_iteration_metrics(
             sim_file=sim_file,
             observed_site=observed_site,
@@ -386,7 +412,10 @@ def _calculate_iteration_metrics(
     failed_log_lock: threading.Lock,
 ) -> dict[str, float] | None:
     if not sim_file.exists() or sim_file.stat().st_size == 0:
-        print(f"WARNING: File {sim_file} is empty or missing. Skipping this iteration.")
+        print(
+            f"WARNING: File {sim_file} is empty or missing. Skipping this iteration.",
+            flush=True,
+        )
         _append_problem_entry(
             failed_log_path,
             failed_log_lock,
@@ -397,7 +426,10 @@ def _calculate_iteration_metrics(
     sim_frame = pd.read_parquet(sim_file)
 
     if sim_frame.empty:
-        print(f"WARNING: File {sim_file} has no rows. Skipping this iteration.")
+        print(
+            f"WARNING: File {sim_file} has no rows. Skipping this iteration.",
+            flush=True,
+        )
         _append_problem_entry(
             failed_log_path,
             failed_log_lock,
