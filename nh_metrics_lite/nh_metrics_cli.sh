@@ -10,6 +10,8 @@
 
 # Written using Gemini 3 Pro; checked by Lauren Bolotin 2026-05-18
 
+# TODO: update batch directive according to Seth's recommendations
+# TODO: improve efficiency
 # --- USER CONFIGURATION ---
 # If the user didn't set these in their terminal, default to a generic structure
 # PROJECT_DIR: your user's directory where you'll install nh-metrics-lite
