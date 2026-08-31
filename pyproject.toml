@@ -13,6 +13,8 @@ dependencies = [
     "numpy",
     "scipy",
     "pyarrow",
+    "numba",
+    "python-dateutil",
 ]
 
 [project.scripts]

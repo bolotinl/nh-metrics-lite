@@ -35,6 +35,7 @@ for use with ngen-cal
 
 Changelog/Contributions
 2025-12-04 Originally created, LB
+2026-08-31 Moved infer_datetime_coord into nh_utils_lite.py, LB
 '''
 
 from __future__ import annotations
@@ -45,9 +46,11 @@ from pathlib import Path
 from pandas.tseries.frequencies import to_offset
 import numpy as np
 import re
-from typing import Tuple, Union, Dict, List
-from xarray import DataArray, Dataset
+from typing import Tuple, Dict, List
+from xarray import DataArray
 from scipy import stats, signal
+
+from .nh_utils_lite import infer_datetime_coord
 
 
 '''GET NEURALHYDROLOGY HELPER FUNCTIONS'''
@@ -182,33 +185,6 @@ def get_frequency_factor(freq_one: str, freq_two: str) -> float:
     except ValueError as err:
         raise ValueError(f'Frequencies {freq_one} and/or {freq_two} are not comparable.') from err
     return factor
-
-
-def infer_datetime_coord(xr: Union[DataArray, Dataset]) -> str:
-    """Checks for coordinate with 'date' in its name and returns the name.
-
-    Parameters
-    ----------
-    xr : Union[DataArray, Dataset]
-        Array to infer coordinate name of.
-
-    Returns
-    -------
-    str
-        Name of datetime coordinate name.
-
-    Raises
-    ------
-    RuntimeError
-        If none or multiple coordinates with 'date' in its name are found.
-    """
-    candidates = [c for c in list(xr.coords) if "date" in c]
-    if len(candidates) > 1:
-        raise RuntimeError("Found multiple coordinates with 'date' in its name.")
-    if not candidates:
-        raise RuntimeError("Did not find any coordinate with 'date' in its name")
-
-    return candidates[0]
 
 '''GET NEURALHYDROLOGY METRICS FUNCTIONS'''
 
