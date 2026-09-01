@@ -6,13 +6,15 @@ build-backend = "setuptools.build_meta"
 name = "nh-metrics-lite"
 version = "0.1.0"
 description = "Lightweight utility functions adapted from neuralhydrology"
-requires-python = ">=3.12"
+requires-python = ">=3.9"
 dependencies = [
     "pandas",
     "xarray",
     "numpy",
     "scipy",
     "pyarrow",
+    "numba",
+    "python-dateutil",
 ]
 
 [project.scripts]
